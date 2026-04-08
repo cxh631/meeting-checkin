@@ -107,6 +107,14 @@
 
       <div class="panel" style="margin-top: 24px;">
         <h2>名单导入</h2>
+        <div class="panel" style="margin-bottom: 20px; background: #f8fafc; border: 1px solid #e5e7eb;">
+          <h3 style="margin-top: 0;">添加单个成员</h3>
+          <div class="field-group"><label>姓名</label><input type="text" id="singleName" placeholder="请输入姓名"></div>
+          <div class="field-group"><label>团队</label><select id="singleTeam"><option value="运营">运营</option><option value="硬件">硬件</option><option value="软件">软件</option><option value="设计">设计</option></select></div>
+          <div class="field-group"><label>联系方式</label><input type="text" id="singleContact" placeholder="可选"></div>
+          <button class="button-primary" id="addSingleBtn" type="button">添加成员</button>
+          <div id="singleMessage" class="alert" style="margin-top: 10px;"></div>
+        </div>
         <div class="field-group"><label>按行输入：姓名,团队,联系方式</label><textarea id="importText" rows="8" placeholder="张三,运营,13800000000\n李四,硬件,13800000001"></textarea><span class="small-note">支持批量导入，团队必须为运营/硬件/软件/设计。</span></div>
         <button class="button-primary" id="importBtn" type="button">导入名单</button>
         <div class="field-group" style="margin-top:18px;"><label>上传名单文件</label><input type="file" id="uploadFile" accept=".csv,.pdf"><span class="small-note">支持 CSV 或 PDF 文件自动识别。</span></div>
@@ -117,7 +125,7 @@
 
       <div class="panel" style="margin-top: 24px;">
         <h2>当前成员名单</h2>
-        <div class="table-wrap"><table id="membersTable"><thead><tr><th>姓名</th><th>团队</th><th>联系方式</th></tr></thead><tbody></tbody></table></div>
+        <div class="table-wrap"><table id="membersTable"><thead><tr><th>姓名</th><th>团队</th><th>联系方式</th><th>操作</th></tr></thead><tbody></tbody></table></div>
       </div>
 
       <div class="panel" style="margin-top: 24px;">
@@ -234,6 +242,23 @@
       }, (error) => { message.textContent = '定位失败，请检查浏览器定位权限。'; console.error(error); });
     });
 
+    document.getElementById('addSingleBtn').addEventListener('click', async () => {
+      const name = document.getElementById('singleName').value.trim();
+      const team = document.getElementById('singleTeam').value;
+      const contact = document.getElementById('singleContact').value.trim();
+      const message = document.getElementById('singleMessage');
+      message.textContent = '';
+      if (!name) {
+        message.textContent = '请输入姓名';
+        return;
+      }
+      await fetch('/api/members', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, team, contact }) });
+      message.textContent = '成员添加成功';
+      document.getElementById('singleName').value = '';
+      document.getElementById('singleContact').value = '';
+      loadMembers();
+    });
+
     document.getElementById('importBtn').addEventListener('click', async () => {
       const rawText = document.getElementById('importText').value.replace(/，/g, ',');
       const text = rawText.trim();
@@ -268,7 +293,11 @@
       const response = await fetch('/api/import', { method: 'POST', body: formData });
       const result = await response.json();
       if (result.success) {
-        uploadMessage.textContent = `文件导入完成：新增 ${result.added} 条，忽略 ${result.ignored} 条`;
+        let message = `文件导入完成：新增 ${result.added} 条，忽略 ${result.ignored} 条`;
+        if (result.errors && result.errors.length > 0) {
+          message += `\n\n导入错误 (${result.errors.length} 个):\n` + result.errors.join('\n');
+        }
+        uploadMessage.textContent = message;
         loadMembers();
       } else {
         uploadMessage.textContent = `导入失败：${result.message}`;
@@ -278,7 +307,9 @@
     function loadMembers() {
       fetch('/api/members').then(r => r.json()).then(members => {
         const tbody = document.querySelector('#membersTable tbody'); tbody.innerHTML = '';
-        members.forEach(member => { tbody.innerHTML += `<tr><td>${member.name}</td><td>${member.team}</td><td>${member.contact || '-'}</td></tr>`; });
+        members.forEach((member, index) => {
+          tbody.innerHTML += `<tr><td>${member.name}</td><td>${member.team}</td><td>${member.contact || '-'}</td><td><button onclick="deleteMember(${index})" style="background:#ef4444;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">删除</button></td></tr>`;
+        });
       });
     }
 
@@ -288,6 +319,19 @@
         const tbody = document.querySelector('#checkinsTable tbody'); tbody.innerHTML = '';
         checkins.filter(c => !filter || c.team === filter).forEach(c => { tbody.innerHTML += `<tr><td>${c.name}</td><td>${c.team}</td><td>${new Date(c.time).toLocaleString()}</td><td>${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}</td></tr>`; });
       });
+    }
+
+    function deleteMember(index) {
+      if (confirm('确定要删除这个成员吗？')) {
+        fetch(`/api/members/${index}`, { method: 'DELETE' }).then(r => r.json()).then(result => {
+          if (result.success) {
+            loadMembers();
+            refreshSummary();
+          } else {
+            alert('删除失败：' + result.message);
+          }
+        });
+      }
     }
 
     document.getElementById('filterTeam').addEventListener('change', loadCheckins);

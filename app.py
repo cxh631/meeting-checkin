@@ -60,13 +60,14 @@ def post_settings():
 def get_members():
     return jsonify(read_data('members.json'))
 
-@app.route('/api/members', methods=['POST'])
-def post_member():
-    data = request.json
+@app.route('/api/members/<int:index>', methods=['DELETE'])
+def delete_member(index):
     members = read_data('members.json')
-    members.append(data)
-    write_data('members.json', members)
-    return jsonify({'success': True})
+    if 0 <= index < len(members):
+        deleted = members.pop(index)
+        write_data('members.json', members)
+        return jsonify({'success': True, 'deleted': deleted})
+    return jsonify({'success': False, 'message': '成员不存在'})
 
 @app.route('/api/import', methods=['POST'])
 def import_members():
@@ -86,11 +87,15 @@ def import_members():
     saved = read_data('members.json')
     added = 0
     ignored = 0
+    errors = []
     for member in members:
         name = member.get('name')
         team = member.get('team')
-        if not name or not team or team not in ['运营', '硬件', '软件', '设计']:
-            invalid += 1
+        if not name or not team:
+            errors.append(f"缺少姓名或团队: {name}, {team}")
+            continue
+        if team not in ['运营', '硬件', '软件', '设计']:
+            errors.append(f"无效团队: {team} (必须是运营/硬件/软件/设计)")
             continue
         if (name, team) in existing:
             ignored += 1
@@ -99,7 +104,7 @@ def import_members():
         existing.add((name, team))
         added += 1
     write_data('members.json', saved)
-    return jsonify({'success': True, 'added': added, 'ignored': ignored, 'invalid': invalid})
+    return jsonify({'success': True, 'added': added, 'ignored': ignored, 'errors': errors[:10]})  # 只返回前10个错误
 
 @app.route('/api/checkin', methods=['POST'])
 def checkin_post():
@@ -131,7 +136,20 @@ def get_checkins():
     return jsonify(read_data('checkins.json'))
 
 def parse_csv(upload):
-    text = upload.read().decode('utf-8', errors='ignore')
+    content = upload.read()
+    # 尝试多种编码
+    encodings = ['utf-8', 'gbk', 'gb2312', 'utf-16', 'latin1']
+    text = None
+    for encoding in encodings:
+        try:
+            text = content.decode(encoding, errors='ignore')
+            if text.strip():  # 如果解码后有内容，说明编码正确
+                break
+        except:
+            continue
+    if not text:
+        text = content.decode('utf-8', errors='ignore')
+
     rows = []
     invalid = 0
     reader = csv.reader(io.StringIO(text))
