@@ -34,8 +34,12 @@ def write_data(file, data):
 def index():
     return send_from_directory('public', 'index.html')
 
+@app.route('/checkin')
+def checkin_page():
+    return send_from_directory('public', 'checkin.html')
+
 @app.route('/checkin.html')
-def checkin():
+def checkin_html():
     return send_from_directory('public', 'checkin.html')
 
 @app.route('/admin.html')
