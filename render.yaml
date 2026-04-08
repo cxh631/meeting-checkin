@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: meeting-checkin
+    env: docker
+    plan: free
+    dockerfilePath: Dockerfile
+    branch: main

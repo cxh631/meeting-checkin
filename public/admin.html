@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+    <meta charset="UTF-8">
+    <title>团队管理</title>
+    <meta http-equiv="refresh" content="0;url=/#admin">
+</head>
+<body>
+    正在跳转到统一管理页面...
+    <script>location.href = '/#admin';</script>
+</body>
+</html>
+            <label>按行输入：姓名,团队,联系方式</label>
+            <textarea id="importText" rows="8" placeholder="张三,运营,13800000000\n李四,硬件,13800000001"></textarea>
+            <span class="small-note">支持批量导入，团队必须为运营 / 硬件 / 软件 / 设计。</span>
+          </div>
+          <button class="button-primary" id="importBtn" type="button">导入名单</button>
+          <div class="field-group" style="margin-top: 18px;">
+            <label>上传名单文件</label>
+            <input type="file" id="uploadFile" accept=".csv,.pdf">
+            <span class="small-note">支持 CSV 或 PDF 文件自动识别。</span>
+          </div>
+          <button class="button-primary" id="uploadBtn" type="button" style="margin-top: 8px;">上传并导入</button>
+          <div id="uploadMessage" class="alert"></div>
+          <div id="importMessage" class="alert"></div>
+        </div>
+
+        <div class="panel">
+          <h2>添加单个成员</h2>
+          <form id="memberForm">
+            <div class="field-group">
+              <label>姓名</label>
+              <input type="text" id="mname" required>
+            </div>
+            <div class="field-group">
+              <label>团队</label>
+              <select id="mteam" required>
+                <option value="运营">运营</option>
+                <option value="硬件">硬件</option>
+                <option value="软件">软件</option>
+                <option value="设计">设计</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label>联系方式</label>
+              <input type="text" id="contact">
+            </div>
+            <button class="button-primary" type="submit">添加成员</button>
+          </form>
+          <div id="addMemberMessage" class="alert"></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="panel">
+          <h2>成员名单</h2>
+          <div class="table-wrap">
+            <table id="membersTable">
+              <thead>
+                <tr><th>姓名</th><th>团队</th><th>联系方式</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="panel">
+          <h2>签到记录</h2>
+          <div class="field-group">
+            <label>筛选团队</label>
+            <select id="filterTeam">
+              <option value="">全部</option>
+              <option value="运营">运营</option>
+              <option value="硬件">硬件</option>
+              <option value="软件">软件</option>
+              <option value="设计">设计</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table id="checkinsTable">
+              <thead>
+                <tr><th>姓名</th><th>团队</th><th>时间</th><th>位置</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const validTeams = ['运营','硬件','软件','设计'];
+
+      fetch('/api/settings').then(r => r.json()).then(settings => {
+        if (settings.length > 0) {
+          document.getElementById('lng').value = settings[0].lng;
+          document.getElementById('lat').value = settings[0].lat;
+          document.getElementById('radius').value = settings[0].radius;
+        }
+      });
+
+      document.getElementById('settingsForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const lng = parseFloat(document.getElementById('lng').value);
+        const lat = parseFloat(document.getElementById('lat').value);
+        const radius = parseInt(document.getElementById('radius').value);
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([{ lng, lat, radius }])
+        });
+        alert('签到范围已保存');
+      });
+
+      document.getElementById('detectLocationBtn').addEventListener('click', () => {
+        const message = document.getElementById('locationMessage');
+        if (!navigator.geolocation) {
+          message.textContent = '当前浏览器不支持定位功能，请手动输入经纬度。';
+          return;
+        }
+        message.textContent = '正在获取当前位置，请允许定位...';
+        navigator.geolocation.getCurrentPosition((position) => {
+          const lat = position.coords.latitude.toFixed(6);
+          const lng = position.coords.longitude.toFixed(6);
+          document.getElementById('lat').value = lat;
+          document.getElementById('lng').value = lng;
+          message.textContent = `已获取当前位置：经度 ${lng}，纬度 ${lat}。请确认半径并保存。`;
+        }, (error) => {
+          message.textContent = '定位失败，请检查浏览器定位权限。';
+          console.error('定位失败', error);
+        });
+      });
+
+      document.getElementById('memberForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('mname').value.trim();
+        const team = document.getElementById('mteam').value;
+        const contact = document.getElementById('contact').value.trim();
+        if (!name) return;
+        await fetch('/api/members', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, team, contact })
+        });
+        document.getElementById('addMemberMessage').textContent = '成员添加成功';
+        loadCheckins();
+        loadMembers();
+      });
+
+      document.getElementById('importBtn').addEventListener('click', async () => {
+        const rawText = document.getElementById('importText').value.replace(/，/g, ',');
+        const text = rawText.trim();
+        if (!text) {
+          document.getElementById('importMessage').textContent = '请先输入名单内容';
+          return;
+        }
+        const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+        let successCount = 0;
+        let failCount = 0;
+        for (const line of lines) {
+          const parts = line.split(',').map(item => item.trim());
+          if (parts.length < 2) {
+            failCount += 1;
+            continue;
+          }
+          const [name, team, contact=''] = parts;
+          if (!name || !validTeams.includes(team)) {
+            failCount += 1;
+            continue;
+          }
+          await fetch('/api/members', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, team, contact })
+          });
+          successCount += 1;
+        }
+        document.getElementById('importMessage').textContent = `成功导入 ${successCount} 条名单，失败 ${failCount} 条`;
+        loadMembers();
+      });
+
+      document.getElementById('uploadBtn').addEventListener('click', async () => {
+        const fileInput = document.getElementById('uploadFile');
+        const uploadMessage = document.getElementById('uploadMessage');
+        uploadMessage.textContent = '';
+        if (!fileInput.files || !fileInput.files[0]) {
+          uploadMessage.textContent = '请选择 CSV 或 PDF 文件进行导入';
+          return;
+        }
+        const file = fileInput.files[0];
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await fetch('/api/import', {
+          method: 'POST',
+          body: formData
+        });
+        const result = await response.json();
+        if (result.success) {
+          uploadMessage.textContent = `文件导入完成：新增 ${result.added} 条，忽略 ${result.ignored} 条`;
+          loadMembers();
+        } else {
+          uploadMessage.textContent = `导入失败：${result.message}`;
+        }
+      });
+
+      function loadMembers() {
+        fetch('/api/members').then(r => r.json()).then(members => {
+          const tbody = document.querySelector('#membersTable tbody');
+          tbody.innerHTML = '';
+          members.forEach(member => {
+            const row = `<tr><td>${member.name}</td><td>${member.team}</td><td>${member.contact || '-'}</td></tr>`;
+            tbody.innerHTML += row;
+          });
+        });
+      }
+
+      function loadCheckins() {
+        fetch('/api/checkins').then(r => r.json()).then(checkins => {
+          const filter = document.getElementById('filterTeam').value;
+          const tbody = document.querySelector('#checkinsTable tbody');
+          tbody.innerHTML = '';
+          checkins.filter(c => !filter || c.team === filter).forEach(c => {
+            const row = `<tr><td>${c.name}</td><td>${c.team}</td><td>${new Date(c.time).toLocaleString()}</td><td>${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}</td></tr>`;
+            tbody.innerHTML += row;
+          });
+        });
+      }
+
+      document.getElementById('filterTeam').addEventListener('change', loadCheckins);
+      loadCheckins();
+      loadMembers();
+    </script>
+</body>
+</html>
