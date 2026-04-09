@@ -27,6 +27,9 @@
       </div>
     </main>
     <script>
+      const urlParams = new URLSearchParams(window.location.search);
+      const activityId = urlParams.get('activity_id') || 'default';
+
       document.getElementById('checkinForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         const name = document.getElementById('name').value.trim();
@@ -43,7 +46,7 @@
           const response = await fetch('/api/checkin', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, team, lat, lng })
+            body: JSON.stringify({ name, team, lat, lng, activity_id: activityId })
           });
           const result = await response.json();
           message.textContent = result.success ? '签到成功 🎉' : `签到失败：${result.message}`;

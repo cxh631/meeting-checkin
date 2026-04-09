@@ -5,6 +5,7 @@ import json
 import os
 from datetime import datetime
 import math
+import uuid
 try:
     from PyPDF2 import PdfReader
 except ImportError:
@@ -19,16 +20,47 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 def read_data(file):
     path = os.path.join(DATA_DIR, file)
-    if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
+    if not os.path.exists(path):
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump([], f, ensure_ascii=False, indent=2)
+        return []
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
 def write_data(file, data):
     path = os.path.join(DATA_DIR, file)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def generate_id():
+    return uuid.uuid4().hex
+
+
+def normalize_members(members):
+    changed = False
+    for member in members:
+        if 'id' not in member:
+            member['id'] = generate_id()
+            changed = True
+        if 'activity_id' not in member:
+            member['activity_id'] = 'default'
+            changed = True
+    if changed:
+        write_data('members.json', members)
+    return members
+
+
+def ensure_default_activity():
+    activities = read_data('activities.json')
+    if not activities:
+        default = {'id': 'default', 'name': '默认活动', 'created': datetime.now().isoformat()}
+        activities.append(default)
+        write_data('activities.json', activities)
+    return activities
+
+ensure_default_activity()
 
 @app.route('/')
 def index():
@@ -56,21 +88,58 @@ def post_settings():
     write_data('settings.json', data)
     return jsonify({'success': True})
 
+@app.route('/api/activities', methods=['GET'])
+def get_activities():
+    activities = read_data('activities.json')
+    if not activities:
+        activities = ensure_default_activity()
+    return jsonify(activities)
+
+@app.route('/api/activities', methods=['POST'])
+def create_activity():
+    data = request.json
+    activities = read_data('activities.json')
+    new_id = data.get('id') or f"activity-{int(datetime.now().timestamp())}"
+    activity = {'id': new_id, 'name': data.get('name', '新活动'), 'created': datetime.now().isoformat()}
+    activities.append(activity)
+    write_data('activities.json', activities)
+    return jsonify({'success': True, 'activity': activity})
+
 @app.route('/api/members', methods=['GET'])
 def get_members():
-    return jsonify(read_data('members.json'))
+    activity_id = request.args.get('activity_id', 'default')
+    members = normalize_members(read_data('members.json'))
+    return jsonify([member for member in members if member.get('activity_id', 'default') == activity_id])
 
-@app.route('/api/members/<int:index>', methods=['DELETE'])
-def delete_member(index):
-    members = read_data('members.json')
-    if 0 <= index < len(members):
-        deleted = members.pop(index)
-        write_data('members.json', members)
-        return jsonify({'success': True, 'deleted': deleted})
+@app.route('/api/members', methods=['POST'])
+def post_member():
+    data = request.json
+    activity_id = request.args.get('activity_id', 'default')
+    member = {
+        'id': generate_id(),
+        'name': data.get('name'),
+        'team': data.get('team'),
+        'contact': data.get('contact', ''),
+        'activity_id': activity_id
+    }
+    members = normalize_members(read_data('members.json'))
+    members.append(member)
+    write_data('members.json', members)
+    return jsonify({'success': True})
+
+@app.route('/api/members/<member_id>', methods=['DELETE'])
+def delete_member(member_id):
+    members = normalize_members(read_data('members.json'))
+    for index, member in enumerate(members):
+        if str(member.get('id')) == str(member_id):
+            deleted = members.pop(index)
+            write_data('members.json', members)
+            return jsonify({'success': True, 'deleted': deleted})
     return jsonify({'success': False, 'message': '成员不存在'})
 
 @app.route('/api/import', methods=['POST'])
 def import_members():
+    activity_id = request.args.get('activity_id', 'default')
     if 'file' not in request.files:
         return jsonify({'success': False, 'message': '未找到上传文件'})
     upload = request.files['file']
@@ -83,8 +152,8 @@ def import_members():
     else:
         return jsonify({'success': False, 'message': '仅支持 CSV 或 PDF 文件'})
 
-    existing = {(m.get('name'), m.get('team')) for m in read_data('members.json')}
-    saved = read_data('members.json')
+    saved = normalize_members(read_data('members.json'))
+    existing = {(m.get('name'), m.get('team'), m.get('activity_id', 'default')) for m in saved}
     added = 0
     ignored = 0
     errors = []
@@ -97,18 +166,22 @@ def import_members():
         if team not in ['运营', '硬件', '软件', '设计']:
             errors.append(f"无效团队: {team} (必须是运营/硬件/软件/设计)")
             continue
-        if (name, team) in existing:
+        key = (name, team, activity_id)
+        if key in existing:
             ignored += 1
             continue
+        member['activity_id'] = activity_id
+        member['id'] = generate_id()
         saved.append(member)
-        existing.add((name, team))
+        existing.add(key)
         added += 1
     write_data('members.json', saved)
-    return jsonify({'success': True, 'added': added, 'ignored': ignored, 'errors': errors[:10]})  # 只返回前10个错误
+    return jsonify({'success': True, 'added': added, 'ignored': ignored, 'errors': errors[:10]})
 
 @app.route('/api/checkin', methods=['POST'])
 def checkin_post():
     data = request.json
+    activity_id = data.get('activity_id', 'default')
     name = data['name']
     team = data['team']
     lat = data['lat']
@@ -122,6 +195,7 @@ def checkin_post():
         return jsonify({'success': False, 'message': '不在指定范围内'})
     checkins = read_data('checkins.json')
     checkins.append({
+        'activity_id': activity_id,
         'name': name,
         'team': team,
         'lat': lat,
@@ -133,7 +207,8 @@ def checkin_post():
 
 @app.route('/api/checkins', methods=['GET'])
 def get_checkins():
-    return jsonify(read_data('checkins.json'))
+    activity_id = request.args.get('activity_id', 'default')
+    return jsonify([c for c in read_data('checkins.json') if c.get('activity_id', 'default') == activity_id])
 
 def parse_csv(upload):
     content = upload.read()

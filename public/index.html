@@ -57,7 +57,7 @@
           <div class="qr-panel">
             <div class="qrcode-box" id="qrcode"></div>
             <p>扫码即可直接打开签到页面。</p>
-            <a class="center-link" href="/checkin">打开签到页</a>
+            <a id="checkinLink" class="center-link" href="/checkin">打开签到页</a>
           </div>
         </div>
         <div class="panel">
@@ -93,6 +93,12 @@
     </section>
 
     <section id="admin" class="section hidden">
+      <div class="panel">
+        <h2>活动管理</h2>
+        <div class="field-group"><label>当前活动</label><select id="activitySelect"></select></div>
+        <div class="field-group"><label>新活动名称</label><input type="text" id="newActivityName" placeholder="输入新活动名称"></div>
+        <button class="button-primary" id="createActivityBtn" type="button">创建活动</button>
+      </div>
       <div class="panel">
         <h2>签到范围设置</h2>
         <form id="settingsForm">
@@ -142,15 +148,37 @@
     const validTeams = ['运营','硬件','软件','设计'];
     const qrcodeContainer = document.getElementById('qrcode');
     let qrcode;
+    let activities = [];
+    let currentActivityId = 'default';
 
     navButtons.forEach(button => button.addEventListener('click', () => setSection(button.dataset.section)));
+
+    function apiUrl(path) {
+      return `${path}?activity_id=${encodeURIComponent(currentActivityId)}`;
+    }
 
     function setSection(name) {
       Object.entries(sections).forEach(([key, section]) => section.classList.toggle('hidden', key !== name));
       navButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.section === name));
       window.location.hash = name;
       if (name === 'dashboard') refreshSummary();
-      if (name === 'admin') { loadMembers(); loadCheckins(); }
+      if (name === 'admin') { loadActivities(); loadMembers(); loadCheckins(); }
+    }
+
+    async function loadActivities(selectedActivityId) {
+      activities = await fetch('/api/activities').then(r => r.json());
+      const select = document.getElementById('activitySelect');
+      select.innerHTML = activities.map(activity => `<option value="${activity.id}">${activity.name}</option>`).join('');
+      if (selectedActivityId && activities.some(a => a.id === selectedActivityId)) {
+        currentActivityId = selectedActivityId;
+      } else if (!activities.some(a => a.id === currentActivityId)) {
+        currentActivityId = activities.length ? activities[0].id : 'default';
+      }
+      select.value = currentActivityId;
+      updateQR();
+      loadMembers();
+      loadCheckins();
+      if (!sections.dashboard.classList.contains('hidden')) refreshSummary();
     }
 
     function loadHashSection() {
@@ -174,13 +202,17 @@
 
     function updateQR() {
       const meetingId = Date.now();
-      const url = `${window.location.origin}/checkin?meeting=${meetingId}`;
+      const url = `${window.location.origin}/checkin?activity_id=${encodeURIComponent(currentActivityId)}&meeting=${meetingId}`;
       createQRCode(url);
+      const checkinLink = document.getElementById('checkinLink');
+      if (checkinLink) {
+        checkinLink.href = url;
+      }
     }
 
     async function refreshSummary() {
-      const members = await fetch('/api/members').then(r => r.json());
-      const checkins = await fetch('/api/checkins').then(r => r.json());
+      const members = await fetch(apiUrl('/api/members')).then(r => r.json());
+      const checkins = await fetch(apiUrl('/api/checkins')).then(r => r.json());
       const teamNames = ['运营','硬件','软件','设计'];
       const signedDate = new Date().toISOString().slice(0,10);
       document.getElementById('teamCount').textContent = teamNames.length;
@@ -211,7 +243,7 @@
       navigator.geolocation.getCurrentPosition(async (position) => {
         const lat = position.coords.latitude;
         const lng = position.coords.longitude;
-        const response = await fetch('/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, team, lat, lng }) });
+        const response = await fetch('/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, team, lat, lng, activity_id: currentActivityId }) });
         const result = await response.json();
         message.textContent = result.success ? '签到成功 🎉' : `签到失败：${result.message}`;
       }, () => { message.textContent = '无法获取定位，请允许定位权限。'; });
@@ -224,6 +256,29 @@
       const radius = parseInt(document.getElementById('radius').value);
       await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([{ lng, lat, radius }]) });
       alert('签到范围已保存');
+    });
+
+    document.getElementById('createActivityBtn').addEventListener('click', async () => {
+      const name = document.getElementById('newActivityName').value.trim();
+      if (!name) {
+        alert('请输入活动名称');
+        return;
+      }
+      const response = await fetch('/api/activities', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+      const result = await response.json();
+      if (result.success) {
+        document.getElementById('newActivityName').value = '';
+        await loadActivities(result.activity.id);
+        alert('活动已创建');
+      }
+    });
+
+    document.getElementById('activitySelect').addEventListener('change', async (event) => {
+      currentActivityId = event.target.value;
+      updateQR();
+      loadMembers();
+      loadCheckins();
+      refreshSummary();
     });
 
     document.getElementById('detectLocationBtn').addEventListener('click', () => {
@@ -252,7 +307,7 @@
         message.textContent = '请输入姓名';
         return;
       }
-      await fetch('/api/members', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, team, contact }) });
+      await fetch(apiUrl('/api/members'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, team, contact }) });
       message.textContent = '成员添加成功';
       document.getElementById('singleName').value = '';
       document.getElementById('singleContact').value = '';
@@ -275,7 +330,7 @@
         if (parts.length < 2) { failCount += 1; continue; }
         const [name, team, contact=''] = parts;
         if (!name || !validTeams.includes(team)) { failCount += 1; continue; }
-        await fetch('/api/members', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, team, contact }) });
+        await fetch(apiUrl('/api/members'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, team, contact }) });
         successCount += 1;
       }
       importMessage.textContent = `成功导入 ${successCount} 条名单，失败 ${failCount} 条`;
@@ -290,7 +345,7 @@
       const file = fileInput.files[0];
       const formData = new FormData();
       formData.append('file', file);
-      const response = await fetch('/api/import', { method: 'POST', body: formData });
+      const response = await fetch(`${apiUrl('/api/import')}`, { method: 'POST', body: formData });
       const result = await response.json();
       if (result.success) {
         let message = `文件导入完成：新增 ${result.added} 条，忽略 ${result.ignored} 条`;
@@ -305,25 +360,25 @@
     });
 
     function loadMembers() {
-      fetch('/api/members').then(r => r.json()).then(members => {
+      fetch(apiUrl('/api/members')).then(r => r.json()).then(members => {
         const tbody = document.querySelector('#membersTable tbody'); tbody.innerHTML = '';
-        members.forEach((member, index) => {
-          tbody.innerHTML += `<tr><td>${member.name}</td><td>${member.team}</td><td>${member.contact || '-'}</td><td><button onclick="deleteMember(${index})" style="background:#ef4444;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">删除</button></td></tr>`;
+        members.forEach(member => {
+          tbody.innerHTML += `<tr><td>${member.name}</td><td>${member.team}</td><td>${member.contact || '-'}</td><td><button onclick="deleteMember('${member.id}')" style="background:#ef4444;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">删除</button></td></tr>`;
         });
       });
     }
 
     function loadCheckins() {
-      fetch('/api/checkins').then(r => r.json()).then(checkins => {
+      fetch(apiUrl('/api/checkins')).then(r => r.json()).then(checkins => {
         const filter = document.getElementById('filterTeam').value;
         const tbody = document.querySelector('#checkinsTable tbody'); tbody.innerHTML = '';
         checkins.filter(c => !filter || c.team === filter).forEach(c => { tbody.innerHTML += `<tr><td>${c.name}</td><td>${c.team}</td><td>${new Date(c.time).toLocaleString()}</td><td>${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}</td></tr>`; });
       });
     }
 
-    function deleteMember(index) {
+    function deleteMember(memberId) {
       if (confirm('确定要删除这个成员吗？')) {
-        fetch(`/api/members/${index}`, { method: 'DELETE' }).then(r => r.json()).then(result => {
+        fetch(`/api/members/${memberId}`, { method: 'DELETE' }).then(r => r.json()).then(result => {
           if (result.success) {
             loadMembers();
             refreshSummary();
@@ -336,9 +391,13 @@
 
     document.getElementById('filterTeam').addEventListener('change', loadCheckins);
     window.addEventListener('hashchange', loadHashSection);
-    loadHashSection();
-    updateQR();
-    setInterval(updateQR, 60000);
+    loadActivities().then(() => {
+      loadHashSection();
+      setInterval(updateQR, 60000);
+    }).catch((error) => {
+      console.error('加载活动失败', error);
+      loadHashSection();
+    });
   </script>
 </body>
 </html>
